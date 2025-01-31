@@ -25,11 +25,11 @@ class TicketPricePredictorXGB:
             le = LabelEncoder()
             self.df[col] = le.fit_transform(self.df[col])
             self.label_encoders[col] = le
-    
+
     def remove_outliers(self): 
         for col in self.df.columns: 
             Q1 = self.df[col].quantile(0.25)
-            Q3 = self.df[col].quantile(0.75) 
+            Q3 = self.df[col].quantile(0.75)
             IQR = Q3 - Q1
             lower_bound = Q1 - 1.5 * IQR 
             upper_bound = Q3 + 1.5 * IQR 
@@ -61,7 +61,7 @@ class TicketPricePredictorXGB:
             "subsample": 0.8,
             "colsample_bytree": 0.8,
             "reg_alpha": 10,
-            "reg_lambda": 20
+            "reg_lambda": 15
         }
         
         self.model = xgb.train(
@@ -69,29 +69,23 @@ class TicketPricePredictorXGB:
             dtrain,
             num_boost_round=2000,
             evals=[(dval, "Validation")],
-            early_stopping_rounds=50,
+            early_stopping_rounds=100,
             verbose_eval=10
         )
 
         self.calibrate_conformal(X_val, y_val)
     
-    def calibrate_conformal(self, X_val: np.ndarray, y_val: pd.Series, alpha=0.5) -> int:
-
+    def calibrate_conformal(self, X_val: np.ndarray, y_val: pd.Series, alpha=0.1) -> int:
         dval = xgb.DMatrix(X_val)
         y_val_pred = self.model.predict(dval)
-        
-        self.residuals = np.abs(y_val - y_val_pred)  # Обчислюємо залишкові помилки
-        self.q = np.quantile(self.residuals, 1 - alpha)  # Обчислюємо квантиль
-        
-        print(f"Квантиль conformal prediction: {self.q:.2f}")
-
-        # Зберігаємо залишкові помилки
+        self.residuals = np.abs(y_val - y_val_pred)
+        self.q = np.quantile(self.residuals, 1 - alpha)
         self.save_residuals()
-    
+
     def predict_with_intervals(self, X_test: np.ndarray):
         dtest = xgb.DMatrix(X_test)
         y_pred = self.model.predict(dtest)
-        
+
         lower_bound = y_pred - self.q
         upper_bound = y_pred + self.q
         return y_pred, lower_bound, upper_bound
@@ -116,36 +110,20 @@ class TicketPricePredictorXGB:
     def save_residuals(self, path: str = "./"):
         with open(f"{path}residual_errors.pkl", "wb") as f:
             pickle.dump(self.residuals, f)
-        print("Залишкові помилки збережено у residual_errors.pkl")
     
     def plot_feature_importance(self):
         xgb.plot_importance(self.model, importance_type="weight", max_num_features=10)
         plt.show()
 
-    def plot_prediction_intervals(self, X_test, y_test):
-        
-        y_pred, lower_bound, upper_bound = self.predict_with_intervals(X_test)
-
-        plt.figure(figsize=(10, 6))
-        plt.scatter(range(len(y_test)), y_test, color="blue", alpha=0.6, label="Фактичні значення")
-        plt.scatter(range(len(y_test)), y_pred, color="red", label="Прогнози")
-        plt.fill_between(range(len(y_test)), lower_bound, upper_bound, color="orange", alpha=0.3, label="Довірчий інтервал")
-        plt.xlabel("Зразки")
-        plt.ylabel("Ціна квитка")
-        plt.legend()
-        plt.title("Conformal Prediction: довірчі інтервали")
-        plt.show()
-
 
 def main():
-    predictor = TicketPricePredictorXGB("C:\\Edu\\Deep learning\\ml week\\data\\preprocessed.csv")
+    predictor = TicketPricePredictorXGB("data.csv")
     predictor.encode_categorical(["section", "row"])
     predictor.remove_outliers()
     
     X_train, y_train, X_val, y_val, X_test, y_test = predictor.prepare_data()
     predictor.train_model(X_train, y_train, X_val, y_val)
     predictor.evaluate_model(X_test, y_test)
-    predictor.plot_prediction_intervals(X_test, y_test)
     predictor.save_artifacts()
 
 if __name__ == "__main__":
